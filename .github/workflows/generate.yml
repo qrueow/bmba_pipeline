@@ -1,0 +1,63 @@
+name: Generate new BMBA mock
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant_name:
+        description: "Имя нового варианта (по умолчанию — дата запуска)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: bmba-pipeline-write
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Determine variant name
+        id: vars
+        run: |
+          if [ -n "${{ github.event.inputs.variant_name }}" ]; then
+            echo "name=${{ github.event.inputs.variant_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=mock-$(date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate mock test
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -m bmba_pipeline.cli generate --variant "${{ steps.vars.outputs.name }}"
+
+      - name: Upload generated JSON as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.vars.outputs.name }}
+          path: output/${{ steps.vars.outputs.name }}.json
+
+      - name: Commit updated database and export
+        run: |
+          git config user.name "bmba-bot"
+          git config user.email "bmba-bot@users.noreply.github.com"
+          git add data/problems.db output/
+          git diff --cached --quiet && echo "Нет изменений для коммита" && exit 0
+          git commit -m "Сгенерирован новый мок: ${{ steps.vars.outputs.name }} [skip ci]"
+          git push
